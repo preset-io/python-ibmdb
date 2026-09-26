@@ -1020,7 +1020,16 @@ static int _python_ibm_db_bind_column_helper(stmt_handle *stmt_res)
 
             case SQL_BIGINT:
             case SQL_DECFLOAT:
-                in_length = stmt_res->column_info[i].size+3;
+                if ( stmt_res->column_info[i].type == SQL_DECFLOAT ) {
+                    /* The column size of a DECFLOAT is its precision (16 or 34),
+                     * but its character form needs up to 42 characters: sign, 34
+                     * digits, decimal point and a signed 4-digit exponent, or a
+                     * plain decimal such as -0.001234567890123456. A smaller
+                     * buffer made valid values fail with CLI0111E. */
+                    in_length = 42+1;
+                } else {
+                    in_length = stmt_res->column_info[i].size+3;
+                }
                 row_data->str_val = (SQLCHAR *)ALLOC_N(char, in_length);
                 if ( row_data->str_val == NULL ) {
                     PyErr_SetString(PyExc_Exception, "Failed to Allocate Memory");
