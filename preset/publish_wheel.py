@@ -1,4 +1,5 @@
-"""Publish an immutable wheel; retries may reuse identical archive content."""
+"""Publish an immutable wheel; only PR retries may reuse identical content."""
+from email.parser import BytesParser
 import hashlib
 import io
 import os
@@ -33,6 +34,11 @@ def publish_wheel(s3, bucket, key, body, is_pr=False):
     except ClientError as error:
         if error.response['Error']['Code'] != 'PreconditionFailed':
             raise
+        if not is_pr:
+            raise RuntimeError(
+                'Stable version already exists; refusing to overwrite or reuse it. '
+                'Bump preset/VERSION before publishing again.'
+            ) from error
         print('Artifact already exists; verifying archive content without overwriting.')
 
     response = s3.get_object(Bucket=bucket, Key=key)
@@ -45,10 +51,22 @@ def publish_wheel(s3, bucket, key, body, is_pr=False):
             'Stored wheel differs from this commit\'s freshly built artifact; '
             'refusing to overwrite or accept it (local sha256={}, stored sha256={}).'.format(
                 hashlib.sha256(body).hexdigest(), hashlib.sha256(stored).hexdigest(),
-            ) + ('' if is_pr else ' Bump __version__ before publishing different content.')
+            ) + ('' if is_pr else ' Bump preset/VERSION before publishing different content.')
         )
     print('Published wheel verified by archive content: ' + key)
     return hashlib.sha256(stored).hexdigest()
+
+
+def verify_wheel_version(body, expected):
+    """Check the built archive's metadata before any publication attempt."""
+    with ZipFile(io.BytesIO(body)) as archive:
+        metadata = [name for name in archive.namelist()
+                    if name.endswith('.dist-info/METADATA')]
+        if len(metadata) != 1:
+            raise ValueError('Expected exactly one wheel METADATA file.')
+        version = BytesParser().parsebytes(archive.read(metadata[0]))['Version']
+        if version != expected:
+            raise ValueError('Wheel version {!r} does not match {!r}.'.format(version, expected))
 
 
 def main():
@@ -57,9 +75,11 @@ def main():
     # Do not leave a previous build's success receipt after a failed retry.
     if receipt.exists():
         receipt.unlink()
+    body = Path('dist', wheel).read_bytes()
+    verify_wheel_version(body, os.environ['PRESET_VERSION'])
     digest = publish_wheel(
         boto3.client('s3'), 'preset-pypi', os.environ['KEY'],
-        Path('dist', wheel).read_bytes(),
+        body,
         is_pr=os.environ.get('ALLOW_IDENTICAL_PR_ARTIFACT') == 'true',
     )
     receipt.write_text(digest + '  ' + wheel + '\n')

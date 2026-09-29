@@ -1,6 +1,6 @@
 // Preset fork publisher for ibm_db; same ci-user / preset-pypi path as the
-// other Preset driver forks. Only pull-request builds publish, versioned
-// 3.2.3+preset.<n>.pr.<number>.<sha>; artifacts are never overwritten.
+// other Preset driver forks. The merged release branch publishes preset/VERSION;
+// PRs publish <version>.pr.<number>.<sha>. Artifacts are never overwritten.
 podTemplate(
     imagePullSecrets: ['preset-pull'],
     containers: [
@@ -14,10 +14,11 @@ podTemplate(
         checkout scm
         def revision = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
         def baseVersion = readFile('preset/VERSION').trim()
-        if (env.CHANGE_ID == null) {
-            error('Only pull-request builds publish; use a PR.')
+        def isPR = env.CHANGE_ID != null
+        if (!isPR && (env.BRANCH_NAME != 'preset/base-v3.2.3' || env.TAG_NAME)) {
+            error('Only pull requests and the preset/base-v3.2.3 branch publish.')
         }
-        def version = "${baseVersion}.pr.${env.CHANGE_ID}.${revision.take(12)}"
+        def version = isPR ? "${baseVersion}.pr.${env.CHANGE_ID}.${revision.take(12)}" : baseVersion
         def wheel = "ibm_db-${version}-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
         def key = "ibm-db/${wheel}"
 
@@ -51,10 +52,11 @@ PY
                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                 ]]) {
                     withEnv(["WHEEL=${wheel}", "KEY=${key}",
-                             "ALLOW_IDENTICAL_PR_ARTIFACT=true"]) {
+                             "ALLOW_IDENTICAL_PR_ARTIFACT=${isPR}", "PRESET_VERSION=${version}"]) {
                         sh '''
                             set -eu
                             python -m pip install --quiet 'boto3>=1.36,<2'
+                            python -m unittest discover -s preset -p 'test_*.py'
                             python preset/publish_wheel.py
                         '''
                     }
