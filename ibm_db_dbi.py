@@ -1491,10 +1491,9 @@ class Cursor(object):
                     self.messages.append(Error(str(ibm_db.stmt_errormsg())))
                 else:
                     self.messages.append(_get_exception(inst))
-                if len(row_list) == 0:
-                    raise self.messages[len(self.messages) - 1]
-                else:
-                    return row_list
+                # Raise even when rows were already read: returning them would
+                # silently truncate the result (e.g. connection lost mid-fetch).
+                raise self.messages[len(self.messages) - 1]
 
             if row != False:
                 if self.FIX_RETURN_TYPE == 1:
